@@ -141,3 +141,5 @@ env/
 
 # Token cache location
 __cache__/
+# Local Netlify folder
+.netlify
