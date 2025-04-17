@@ -26,7 +26,7 @@ def handler(event, context):
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
-                }],
+                }], a
             })
         else:
             ydl_opts['merge_output_format'] = 'mp4'
