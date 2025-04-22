@@ -1,12 +1,12 @@
+import os
 import json
 from yt_dlp import YoutubeDL
-import os
 
-def handler(event, context):
+async def handler(request):
     try:
-        body = json.loads(event['body'])
-        url = body.get('url')
-        download_type = body.get('type', 'video')
+        data = await request.json()
+        url = data.get('url')
+        download_type = data.get('type', 'video')
 
         quality = 'bestvideo+bestaudio' if download_type == 'video' else 'bestaudio/best'
         if 'tiktok.com' in url.lower() and download_type == 'video':
@@ -21,12 +21,11 @@ def handler(event, context):
 
         if download_type == 'audio':
             ydl_opts.update({
-                'format': 'bestaudio/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
-                }], a
+                }]
             })
         else:
             ydl_opts['merge_output_format'] = 'mp4'
@@ -42,8 +41,8 @@ def handler(event, context):
         basename = os.path.basename(real_path)
 
         return {
-            'statusCode': 200,
-            'body': json.dumps({
+            "statusCode": 200,
+            "body": json.dumps({
                 'status': 'success',
                 'filename': basename,
                 'metadata': {
@@ -57,6 +56,6 @@ def handler(event, context):
 
     except Exception as e:
         return {
-            'statusCode': 500,
-            'body': json.dumps({'status': 'error', 'message': str(e)})
+            "statusCode": 500,
+            "body": json.dumps({'status': 'error', 'message': str(e)})
         }
