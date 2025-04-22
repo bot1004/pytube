@@ -143,3 +143,4 @@ env/
 __cache__/
 # Local Netlify folder
 .netlify
+.vercel

@@ -5,7 +5,9 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # Configura el token desde variable de entorno
-BOT_TOKEN = os.environ["8121623575:AAH798Us_OvXfiejYhURKDfxA3m4yXWe3PM"]
+BOT_TOKEN = os.getenv("8121623575:AAH798Us_OvXfiejYhURKDfxA3m4yXWe3PM")
+if not BOT_TOKEN:
+    raise ValueError("No BOT_TOKEN environment variable set")
 
 # Inicializa la app de Telegram
 application = Application.builder().token(BOT_TOKEN).build()
