@@ -13,19 +13,14 @@ from telegram.ext import (
 )
 from yt_dlp import YoutubeDL
 import requests
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 
 # ————— Configuración —————
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 if not BOT_TOKEN:
     raise ValueError("No BOT_TOKEN environment variable set")
-if not YOUTUBE_API_KEY:
-    raise ValueError("No YOUTUBE_API_KEY environment variable set")
 
 N8N_UPLOAD_URL = os.getenv("N8N_UPLOAD_URL", None)
 TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024
@@ -189,19 +184,6 @@ def get_ydl_opts(d_type, url):
     return opts
 
 application = Application.builder().token(BOT_TOKEN).build()
-
-def get_youtube_service():
-    return build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-
-def is_youtube_url(url):
-    return 'youtube.com' in url or 'youtu.be' in url
-
-def get_video_id(url):
-    if 'youtube.com/watch?v=' in url:
-        return url.split('watch?v=')[1].split('&')[0]
-    elif 'youtu.be/' in url:
-        return url.split('youtu.be/')[1].split('?')[0]
-    return None
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
