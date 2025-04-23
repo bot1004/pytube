@@ -91,3 +91,161 @@ You can also do the same for a playlist:
 ```bash
 $ pytube https://www.youtube.com/playlist?list=PLS1QulWo1RIaJECMeUT4LFwJ-ghgoSH6n
 ```
+
+# API de Descarga de Videos y Audio
+
+Esta API permite descargar videos y audio de múltiples plataformas como YouTube, Instagram, TikTok, Twitter, Facebook, Vimeo, Dailymotion y Reddit.
+
+## Requisitos Previos
+
+1. Python 3.8 o superior
+2. pip (gestor de paquetes de Python)
+3. FFmpeg instalado en el sistema
+
+## Instalación
+
+1. Clona el repositorio:
+```bash
+git clone <url-del-repositorio>
+cd <nombre-del-directorio>
+```
+
+2. Instala las dependencias:
+```bash
+pip install -r requirements.txt
+```
+
+3. Instala FFmpeg:
+   - Windows: Descarga desde [ffmpeg.org](https://ffmpeg.org/download.html)
+   - Linux: `sudo apt-get install ffmpeg`
+   - macOS: `brew install ffmpeg`
+
+## Configuración
+
+1. Crea un archivo `.env` en la raíz del proyecto con las siguientes variables:
+```env
+BOT_TOKEN=tu_token_de_telegram
+N8N_UPLOAD_URL=url_de_tu_servicio_n8n (opcional)
+PORT=5000
+```
+
+2. Crea un directorio `downloads` en la raíz del proyecto:
+```bash
+mkdir downloads
+```
+
+## Uso de la API
+
+### Endpoint de Descarga
+
+```
+POST /api/download
+```
+
+### Headers Requeridos
+```
+Content-Type: application/json
+```
+
+### Body de la Petición
+```json
+{
+    "url": "URL_DEL_VIDEO",
+    "type": "video" // o "audio"
+}
+```
+
+### Ejemplo de Uso con Postman
+
+1. Abre Postman
+2. Crea una nueva petición POST
+3. URL: `https://pytube-zcjp.onrender.com/api/download`
+4. Headers:
+   - Key: `Content-Type`
+   - Value: `application/json`
+5. Body (raw JSON):
+```json
+{
+    "url": "https://www.youtube.com/watch?v=ejemplo",
+    "type": "video"
+}
+```
+
+### Ejemplo de Uso con cURL
+
+```bash
+curl -X POST https://pytube-zcjp.onrender.com/api/download \
+-H "Content-Type: application/json" \
+-d '{"url": "https://www.youtube.com/watch?v=ejemplo", "type": "video"}'
+```
+
+### Ejemplo de Uso con n8n
+
+1. Crea un nuevo workflow en n8n
+2. Añade un nodo "HTTP Request"
+3. Configura el nodo:
+   - Method: POST
+   - URL: `https://pytube-zcjp.onrender.com/api/download`
+   - Headers: `Content-Type: application/json`
+   - Body: 
+   ```json
+   {
+       "url": "{{$node["Previous Node"].json.url}}",
+       "type": "{{$node["Previous Node"].json.type}}"
+   }
+   ```
+
+## Respuesta de la API
+
+### Respuesta Exitosa
+```json
+{
+    "status": "success",
+    "filename": "nombre_del_archivo",
+    "metadata": {
+        "title": "título del video",
+        "author": "autor",
+        "length": "duración en segundos",
+        "type": "tipo de descarga"
+    }
+}
+```
+
+### Respuesta de Error
+```json
+{
+    "status": "error",
+    "message": "descripción del error"
+}
+```
+
+## Plataformas Soportadas
+
+- YouTube 📺
+- Instagram 📸
+- TikTok 🎵
+- Twitter 🐦
+- Facebook 👍
+- Vimeo 🎞️
+- Dailymotion 📹
+- Reddit 👽
+
+## Limitaciones
+
+1. Tamaño máximo de archivo: 50MB
+2. Para archivos mayores a 50MB, se requiere configurar `N8N_UPLOAD_URL`
+3. Timeout de descarga: 120 segundos
+
+## Solución de Problemas
+
+1. **Error de FFmpeg**: Asegúrate de que FFmpeg está instalado y accesible en el PATH del sistema
+2. **Error de permisos**: Verifica que el directorio `downloads` tiene permisos de escritura
+3. **Error de timeout**: Aumenta el valor de `timeout` en `gunicorn_config.py` si es necesario
+
+## Contribuir
+
+Las contribuciones son bienvenidas. Por favor, abre un issue para discutir los cambios propuestos.
+
+## Licencia
+
+Este proyecto está bajo la Licencia MIT.
