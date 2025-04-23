@@ -9,8 +9,9 @@ from telegram.ext import (
     ConversationHandler, filters, ContextTypes
 )
 from yt_dlp import YoutubeDL
+import requests
 
-# ————— Configuración básica —————
+# ————— Configuración —————
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
@@ -18,30 +19,24 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("No BOT_TOKEN environment variable set")
 
-# Opcional: si quieres subir archivos grandes a n8n
 N8N_UPLOAD_URL = os.getenv("N8N_UPLOAD_URL", None)
-
-# Límites y constantes
-TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024  # 50 MB
+TELEGRAM_FILE_LIMIT = 50 * 1024 * 1024
 ELEGIR_TIPO = range(1)
 
-# ————— Inicializa el bot de Telegram —————
 application = Application.builder().token(BOT_TOKEN).build()
 
 # /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Envía el enlace del vídeo que quieres descargar "
-        "(YouTube, TikTok, Instagram, etc.)"
+        "✅ El bot está funcionando desde Render! 🚀\nEnvía el enlace del vídeo que quieres descargar."
     )
+
 application.add_handler(CommandHandler("start", start))
 
-# Función helper: detecta plataforma
 def detectar_plataforma(url: str) -> str:
     plataformas = {
         'youtube.com': 'YouTube 📺', 'youtu.be': 'YouTube 📺',
-        'instagram.com': 'Instagram 📸',
-        'tiktok.com': 'TikTok 🎵',
+        'instagram.com': 'Instagram 📸', 'tiktok.com': 'TikTok 🎵',
         'twitter.com': 'Twitter 🐦', 'x.com': 'Twitter 🐦',
         'facebook.com': 'Facebook 👍', 'fb.watch': 'Facebook 👍',
         'vimeo.com': 'Vimeo 🎞️', 'dailymotion.com': 'Dailymotion 📹',
@@ -52,7 +47,6 @@ def detectar_plataforma(url: str) -> str:
             return nombre
     return 'desconocida ❓'
 
-# Paso 1 Telegram: recibimos URL
 async def recibir_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     context.user_data['url'] = url
@@ -65,16 +59,17 @@ async def recibir_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ELEGIR_TIPO
 
-# Paso 2 Telegram: elegimos tipo
 async def elegir_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     eleccion = update.message.text.strip().lower()
     url = context.user_data['url']
     download_type = 'audio' if 'audio' in eleccion else 'video'
 
-    # Llamamos internamente a nuestra ruta /download
-    download_endpoint = f"{request.url_root}api/download"
-    resp = requests.post(download_endpoint, json={'url': url, 'type': download_type})
-    data = resp.json()
+    try:
+        resp = requests.post(request.url_root + "api/download", json={'url': url, 'type': download_type})
+        data = resp.json()
+    except Exception as e:
+        await update.message.reply_text("❌ Error al contactar con la API.")
+        return ConversationHandler.END
 
     if data.get('status') != 'success':
         await update.message.reply_text(f"❌ Error: {data.get('message')}")
@@ -95,7 +90,6 @@ async def elegir_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         )
     else:
-        # si excede límite y tenemos N8N_UPLOAD_URL
         if N8N_UPLOAD_URL:
             with open(file_path, 'rb') as f:
                 files = {'file': (filename, f)}
@@ -105,12 +99,12 @@ async def elegir_tipo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"✅ Muy grande para Telegram.\n"
                     f"Descárgalo aquí: {up.json()['download_url']}"
                 )
-                return ConversationHandler.END
-
-        await update.message.reply_text("❌ El archivo es demasiado grande.")
+            else:
+                await update.message.reply_text("❌ Error al subir el archivo a n8n.")
+        else:
+            await update.message.reply_text("❌ El archivo es demasiado grande.")
     return ConversationHandler.END
 
-# Cancelar
 async def cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Operación cancelada.")
     return ConversationHandler.END
@@ -122,27 +116,28 @@ conv = ConversationHandler(
 )
 application.add_handler(conv)
 
-# ————— Rutas HTTP —————
+# Ruta principal (home)
+@app.route("/", methods=["GET"])
+def home():
+    return "✅ El bot y la API están funcionando en Render."
 
+# Webhook Telegram
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
-    """Endpoint para Telegram (webhook)."""
     update = Update.de_json(request.get_json(force=True), application.bot)
-    # Procesa el update
     asyncio.run(application.initialize())
     asyncio.run(application.process_update(update))
     return jsonify({"ok": True})
 
+# API de descarga
 @app.route("/api/download", methods=["POST"])
 def download_route():
-    """Endpoint para n8n o llamadas directas."""
     data = request.get_json(force=True)
     url = data.get('url')
     d_type = data.get('type', 'video')
 
-    # Configuración de yt-dlp
-    quality = 'bestaudio/best' if d_type=='audio' else 'bestvideo+bestaudio'
-    if 'tiktok.com' in url and d_type=='video':
+    quality = 'bestaudio/best' if d_type == 'audio' else 'bestvideo+bestaudio'
+    if 'tiktok.com' in url.lower() and d_type == 'video':
         quality = 'best'
 
     opts = {
@@ -151,6 +146,7 @@ def download_route():
         'outtmpl': 'downloads/%(title)s.%(ext)s',
         'windowsfilenames': True,
     }
+
     if d_type == 'audio':
         opts['postprocessors'] = [{
             'key': 'FFmpegExtractAudio',
@@ -165,7 +161,7 @@ def download_route():
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             path = ydl.prepare_filename(info)
-            if d_type=='audio':
+            if d_type == 'audio':
                 path = os.path.splitext(path)[0] + ".mp3"
 
         fname = os.path.basename(path)
@@ -180,8 +176,5 @@ def download_route():
         logging.exception("Error download")
         return jsonify(status='error', message=str(e)), 500
 
-# ————— Ejecuta en Render con gunicorn —————
-# En tu dashboard de Render pon:
-# Start Command: gunicorn app:app
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
