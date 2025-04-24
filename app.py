@@ -5,7 +5,7 @@ import asyncio
 import random
 import threading
 import time
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -15,6 +15,7 @@ from yt_dlp import YoutubeDL
 import requests
 from queue import Queue
 from threading import Thread
+import io
 
 # ————— Configuración —————
 logging.basicConfig(level=logging.INFO)
@@ -318,11 +319,58 @@ def process_downloads():
                     'length': info.get('duration'),
                     'type': d_type
                 }
-                download_results[task_id] = {
-                    'status': 'success',
-                    'filename': fname,
-                    'metadata': meta
-                }
+
+                # Intentar subir el archivo a n8n si está configurado
+                if N8N_UPLOAD_URL:
+                    try:
+                        with open(path, 'rb') as f:
+                            files = {'file': (fname, f)}
+                            up = requests.post(N8N_UPLOAD_URL, files=files)
+                        if up.ok and up.json().get('download_url'):
+                            download_results[task_id] = {
+                                'status': 'success',
+                                'filename': fname,
+                                'metadata': meta,
+                                'download_url': up.json()['download_url']
+                            }
+                        else:
+                            # Si falla n8n, devolver el archivo directamente
+                            with open(path, 'rb') as f:
+                                file_data = f.read()
+                            download_results[task_id] = {
+                                'status': 'success',
+                                'filename': fname,
+                                'metadata': meta,
+                                'file_data': file_data.hex()  # Convertir a hexadecimal para JSON
+                            }
+                    except Exception as e:
+                        logging.error(f"Error al subir a n8n: {str(e)}")
+                        # Si falla n8n, devolver el archivo directamente
+                        with open(path, 'rb') as f:
+                            file_data = f.read()
+                        download_results[task_id] = {
+                            'status': 'success',
+                            'filename': fname,
+                            'metadata': meta,
+                            'file_data': file_data.hex()  # Convertir a hexadecimal para JSON
+                        }
+                else:
+                    # Si no hay n8n configurado, devolver el archivo directamente
+                    with open(path, 'rb') as f:
+                        file_data = f.read()
+                    download_results[task_id] = {
+                        'status': 'success',
+                        'filename': fname,
+                        'metadata': meta,
+                        'file_data': file_data.hex()  # Convertir a hexadecimal para JSON
+                    }
+
+                # Limpiar el archivo después de procesarlo
+                try:
+                    os.remove(path)
+                except:
+                    pass
+
             except Exception as e:
                 download_results[task_id] = {
                     'status': 'error',
@@ -366,12 +414,60 @@ def check_status(task_id):
         result = download_results[task_id]
         # Limpiar el resultado después de devolverlo
         del download_results[task_id]
+        
+        if result['status'] == 'success' and 'file_data' in result:
+            # Convertir el archivo de hexadecimal a bytes
+            file_data = bytes.fromhex(result['file_data'])
+            # Eliminar el campo file_data del resultado
+            del result['file_data']
+            # Devolver el archivo como respuesta
+            return send_file(
+                io.BytesIO(file_data),
+                mimetype='application/octet-stream',
+                as_attachment=True,
+                download_name=result['filename']
+            )
+        
         return jsonify(result)
     else:
         return jsonify({
             'status': 'processing',
             'message': 'La descarga aún está en proceso'
         })
+
+@app.route("/api/diagnostic", methods=["GET"])
+def diagnostic():
+    try:
+        # Crear el directorio si no existe
+        os.makedirs('downloads', exist_ok=True)
+        
+        # Obtener información del directorio
+        abs_path = os.path.abspath('downloads')
+        files = os.listdir('downloads')
+        
+        # Obtener información del sistema
+        system_info = {
+            'platform': os.name,
+            'cwd': os.getcwd(),
+            'downloads_path': abs_path,
+            'files_in_downloads': files,
+            'disk_usage': {
+                'total': os.statvfs('.').f_blocks * os.statvfs('.').f_frsize,
+                'free': os.statvfs('.').f_bfree * os.statvfs('.').f_frsize,
+                'used': (os.statvfs('.').f_blocks - os.statvfs('.').f_bfree) * os.statvfs('.').f_frsize
+            }
+        }
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Diagnóstico del sistema',
+            'data': system_info
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
