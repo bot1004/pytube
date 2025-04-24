@@ -304,13 +304,22 @@ def process_downloads():
                 break
             
             task_id, url, d_type = task
+            logging.info(f"Iniciando descarga de {url} (tipo: {d_type})")
+            
             try:
                 opts = get_ydl_opts(d_type, url)
+                logging.info(f"Opciones de descarga configuradas: {opts}")
+                
                 with YoutubeDL(opts) as ydl:
+                    logging.info("Iniciando extracción de información")
                     info = ydl.extract_info(url, download=True)
+                    logging.info(f"Información extraída: {info.get('title')}")
+                    
                     path = ydl.prepare_filename(info)
                     if d_type == 'audio':
                         path = os.path.splitext(path)[0] + ".mp3"
+                    
+                    logging.info(f"Archivo guardado en: {path}")
 
                 fname = os.path.basename(path)
                 meta = {
@@ -320,64 +329,87 @@ def process_downloads():
                     'type': d_type
                 }
 
-                # Intentar subir el archivo a n8n si está configurado
-                if N8N_UPLOAD_URL:
-                    try:
-                        with open(path, 'rb') as f:
-                            files = {'file': (fname, f)}
-                            up = requests.post(N8N_UPLOAD_URL, files=files)
-                        if up.ok and up.json().get('download_url'):
-                            download_results[task_id] = {
-                                'status': 'success',
-                                'filename': fname,
-                                'metadata': meta,
-                                'download_url': up.json()['download_url']
-                            }
+                # Verificar si el archivo existe y tiene tamaño
+                if os.path.exists(path):
+                    file_size = os.path.getsize(path)
+                    logging.info(f"Tamaño del archivo: {file_size} bytes")
+                    
+                    if file_size > 0:
+                        # Intentar subir el archivo a n8n si está configurado
+                        if N8N_UPLOAD_URL:
+                            try:
+                                logging.info("Intentando subir a n8n")
+                                with open(path, 'rb') as f:
+                                    files = {'file': (fname, f)}
+                                    up = requests.post(N8N_UPLOAD_URL, files=files)
+                                if up.ok and up.json().get('download_url'):
+                                    logging.info("Archivo subido exitosamente a n8n")
+                                    download_results[task_id] = {
+                                        'status': 'success',
+                                        'filename': fname,
+                                        'metadata': meta,
+                                        'download_url': up.json()['download_url']
+                                    }
+                                else:
+                                    logging.warning("Error al subir a n8n, devolviendo archivo directamente")
+                                    with open(path, 'rb') as f:
+                                        file_data = f.read()
+                                    download_results[task_id] = {
+                                        'status': 'success',
+                                        'filename': fname,
+                                        'metadata': meta,
+                                        'file_data': file_data.hex()
+                                    }
+                            except Exception as e:
+                                logging.error(f"Error al subir a n8n: {str(e)}")
+                                with open(path, 'rb') as f:
+                                    file_data = f.read()
+                                download_results[task_id] = {
+                                    'status': 'success',
+                                    'filename': fname,
+                                    'metadata': meta,
+                                    'file_data': file_data.hex()
+                                }
                         else:
-                            # Si falla n8n, devolver el archivo directamente
+                            logging.info("N8N no configurado, devolviendo archivo directamente")
                             with open(path, 'rb') as f:
                                 file_data = f.read()
                             download_results[task_id] = {
                                 'status': 'success',
                                 'filename': fname,
                                 'metadata': meta,
-                                'file_data': file_data.hex()  # Convertir a hexadecimal para JSON
+                                'file_data': file_data.hex()
                             }
-                    except Exception as e:
-                        logging.error(f"Error al subir a n8n: {str(e)}")
-                        # Si falla n8n, devolver el archivo directamente
-                        with open(path, 'rb') as f:
-                            file_data = f.read()
+                    else:
+                        logging.error("El archivo descargado está vacío")
                         download_results[task_id] = {
-                            'status': 'success',
-                            'filename': fname,
-                            'metadata': meta,
-                            'file_data': file_data.hex()  # Convertir a hexadecimal para JSON
+                            'status': 'error',
+                            'message': 'El archivo descargado está vacío'
                         }
                 else:
-                    # Si no hay n8n configurado, devolver el archivo directamente
-                    with open(path, 'rb') as f:
-                        file_data = f.read()
+                    logging.error(f"El archivo no existe en la ruta: {path}")
                     download_results[task_id] = {
-                        'status': 'success',
-                        'filename': fname,
-                        'metadata': meta,
-                        'file_data': file_data.hex()  # Convertir a hexadecimal para JSON
+                        'status': 'error',
+                        'message': 'El archivo no se pudo guardar correctamente'
                     }
 
                 # Limpiar el archivo después de procesarlo
                 try:
                     os.remove(path)
-                except:
-                    pass
+                    logging.info("Archivo temporal eliminado")
+                except Exception as e:
+                    logging.error(f"Error al eliminar archivo temporal: {str(e)}")
 
             except Exception as e:
+                logging.error(f"Error en la descarga: {str(e)}")
                 download_results[task_id] = {
                     'status': 'error',
                     'message': str(e)
                 }
             
             download_queue.task_done()
+            logging.info(f"Tarea {task_id} completada")
+            
         except Exception as e:
             logging.error(f"Error en el procesamiento de descargas: {str(e)}")
             time.sleep(1)
@@ -388,30 +420,47 @@ download_worker.start()
 
 @app.route("/api/download", methods=["POST"])
 def download_route():
-    data = request.get_json(force=True)
-    url = data.get('url')
-    d_type = data.get('type', 'video')
+    try:
+        data = request.get_json(force=True)
+        url = data.get('url')
+        d_type = data.get('type', 'video')
 
-    if not url:
-        return jsonify(status='error', message='URL no proporcionada'), 400
+        if not url:
+            return jsonify(status='error', message='URL no proporcionada'), 400
 
-    # Generar un ID único para la tarea
-    task_id = str(int(time.time() * 1000))
-    
-    # Añadir la tarea a la cola
-    download_queue.put((task_id, url, d_type))
-    
-    # Devolver el ID de la tarea inmediatamente
-    return jsonify({
-        'status': 'processing',
-        'task_id': task_id,
-        'message': 'La descarga ha comenzado. Usa el endpoint /api/status/{task_id} para verificar el estado.'
-    })
+        logging.info(f"Recibida solicitud de descarga: {url} (tipo: {d_type})")
+        
+        # Generar un ID único para la tarea
+        task_id = str(int(time.time() * 1000))
+        
+        # Añadir la tarea a la cola
+        download_queue.put((task_id, url, d_type))
+        logging.info(f"Tarea {task_id} añadida a la cola")
+        
+        # Devolver el ID de la tarea inmediatamente
+        return jsonify({
+            'status': 'processing',
+            'task_id': task_id,
+            'message': 'La descarga ha comenzado. Usa el endpoint /api/status/{task_id} para verificar el estado.'
+        })
+    except Exception as e:
+        logging.error(f"Error en la ruta de descarga: {str(e)}")
+        return jsonify(status='error', message=str(e)), 500
 
 @app.route("/api/status/<task_id>", methods=["GET"])
 def check_status(task_id):
+    if not task_id:
+        return jsonify({
+            'status': 'error',
+            'message': 'Task ID no proporcionado'
+        }), 400
+
+    logging.info(f"Verificando estado de tarea: {task_id}")
+    
     if task_id in download_results:
         result = download_results[task_id]
+        logging.info(f"Resultado encontrado para tarea {task_id}: {result['status']}")
+        
         # Limpiar el resultado después de devolverlo
         del download_results[task_id]
         
@@ -430,8 +479,10 @@ def check_status(task_id):
         
         return jsonify(result)
     else:
+        logging.info(f"Tarea {task_id} aún en proceso")
         return jsonify({
             'status': 'processing',
+            'message': 'La descarga aún está en proceso',
             'message': 'La descarga aún está en proceso'
         })
 
