@@ -13,6 +13,8 @@ from telegram.ext import (
 )
 from yt_dlp import YoutubeDL
 import requests
+from queue import Queue
+from threading import Thread
 
 # ————— Configuración —————
 logging.basicConfig(level=logging.INFO)
@@ -289,44 +291,87 @@ def webhook():
     asyncio.run(application.process_update(update))
     return jsonify({"ok": True})
 
-# API de descarga
+# Cola para procesar descargas
+download_queue = Queue()
+download_results = {}
+
+def process_downloads():
+    while True:
+        try:
+            task = download_queue.get()
+            if task is None:
+                break
+            
+            task_id, url, d_type = task
+            try:
+                opts = get_ydl_opts(d_type, url)
+                with YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    path = ydl.prepare_filename(info)
+                    if d_type == 'audio':
+                        path = os.path.splitext(path)[0] + ".mp3"
+
+                fname = os.path.basename(path)
+                meta = {
+                    'title': info.get('title'),
+                    'author': info.get('uploader'),
+                    'length': info.get('duration'),
+                    'type': d_type
+                }
+                download_results[task_id] = {
+                    'status': 'success',
+                    'filename': fname,
+                    'metadata': meta
+                }
+            except Exception as e:
+                download_results[task_id] = {
+                    'status': 'error',
+                    'message': str(e)
+                }
+            
+            download_queue.task_done()
+        except Exception as e:
+            logging.error(f"Error en el procesamiento de descargas: {str(e)}")
+            time.sleep(1)
+
+# Iniciar el worker de descargas
+download_worker = Thread(target=process_downloads, daemon=True)
+download_worker.start()
+
 @app.route("/api/download", methods=["POST"])
 def download_route():
     data = request.get_json(force=True)
     url = data.get('url')
     d_type = data.get('type', 'video')
 
-    os.makedirs('downloads', exist_ok=True)
-    max_retries = 3
-    retry_count = 0
+    if not url:
+        return jsonify(status='error', message='URL no proporcionada'), 400
 
-    while retry_count < max_retries:
-        try:
-            opts = get_ydl_opts(d_type, url)
-            with YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                path = ydl.prepare_filename(info)
-                if d_type == 'audio':
-                    path = os.path.splitext(path)[0] + ".mp3"
+    # Generar un ID único para la tarea
+    task_id = str(int(time.time() * 1000))
+    
+    # Añadir la tarea a la cola
+    download_queue.put((task_id, url, d_type))
+    
+    # Devolver el ID de la tarea inmediatamente
+    return jsonify({
+        'status': 'processing',
+        'task_id': task_id,
+        'message': 'La descarga ha comenzado. Usa el endpoint /api/status/{task_id} para verificar el estado.'
+    })
 
-            fname = os.path.basename(path)
-            meta = {
-                'title': info.get('title'),
-                'author': info.get('uploader'),
-                'length': info.get('duration'),
-                'type': d_type
-            }
-            return jsonify(status='success', filename=fname, metadata=meta)
-
-        except Exception as e:
-            retry_count += 1
-            logging.warning(f"Intento {retry_count} fallido: {str(e)}")
-            if retry_count == max_retries:
-                logging.exception("Error download después de todos los intentos")
-                return jsonify(status='error', message=str(e)), 500
-            continue
-
-    return jsonify(status='error', message="Error después de varios intentos"), 500
+@app.route("/api/status/<task_id>", methods=["GET"])
+def check_status(task_id):
+    if task_id in download_results:
+        result = download_results[task_id]
+        # Limpiar el resultado después de devolverlo
+        del download_results[task_id]
+        return jsonify(result)
+    else:
+        return jsonify({
+            'status': 'processing',
+            'message': 'La descarga aún está en proceso'
+        })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
