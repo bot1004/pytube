@@ -48,7 +48,7 @@ celery.conf.update(app.config)
 # Almacenamiento temporal de estado de tareas
 task_status = {}
 
-@celery.task(bind=True)
+@celery.task(bind=True, max_retries=3)
 def download_task(self, url, media_type, quality=None):
     task_id = self.request.id
     logger.info(f"Tarea {task_id}: Iniciando descarga de {url}")
@@ -77,6 +77,25 @@ def download_task(self, url, media_type, quality=None):
                     }],
                     'verbose': True,
                     'no_warnings': False,
+                    'retries': 10,
+                    'fragment_retries': 10,
+                    'skip_download_archive': True,
+                    'extractor_retries': 3,
+                    'ignoreerrors': True,
+                    'no_check_certificate': True,
+                    'prefer_insecure': True,
+                    'geo_bypass': True,
+                    'geo_verification_proxy': None,
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'DNT': '1',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Cache-Control': 'max-age=0',
+                        'Connection': 'keep-alive',
+                    },
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -95,6 +114,25 @@ def download_task(self, url, media_type, quality=None):
                     'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
                     'verbose': True,
                     'no_warnings': False,
+                    'retries': 10,
+                    'fragment_retries': 10,
+                    'skip_download_archive': True,
+                    'extractor_retries': 3,
+                    'ignoreerrors': True,
+                    'no_check_certificate': True,
+                    'prefer_insecure': True,
+                    'geo_bypass': True,
+                    'geo_verification_proxy': None,
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'DNT': '1',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Cache-Control': 'max-age=0',
+                        'Connection': 'keep-alive',
+                    },
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -110,6 +148,25 @@ def download_task(self, url, media_type, quality=None):
                 'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
                 'verbose': True,
                 'no_warnings': False,
+                'retries': 10,
+                'fragment_retries': 10,
+                'skip_download_archive': True,
+                'extractor_retries': 3,
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_insecure': True,
+                'geo_bypass': True,
+                'geo_verification_proxy': None,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'DNT': '1',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Cache-Control': 'max-age=0',
+                    'Connection': 'keep-alive',
+                },
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -124,6 +181,25 @@ def download_task(self, url, media_type, quality=None):
                 'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
                 'verbose': True,
                 'no_warnings': False,
+                'retries': 10,
+                'fragment_retries': 10,
+                'skip_download_archive': True,
+                'extractor_retries': 3,
+                'ignoreerrors': True,
+                'no_check_certificate': True,
+                'prefer_insecure': True,
+                'geo_bypass': True,
+                'geo_verification_proxy': None,
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-us,en;q=0.5',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'DNT': '1',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Cache-Control': 'max-age=0',
+                    'Connection': 'keep-alive',
+                },
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -159,6 +235,15 @@ def download_task(self, url, media_type, quality=None):
     except Exception as e:
         error_msg = f"Error al descargar: {str(e)}"
         logger.error(f"Tarea {task_id}: {error_msg}")
+        
+        # Si es un error 429, reintentar
+        if "HTTP Error 429" in str(e):
+            try:
+                logger.info(f"Tarea {task_id}: Reintentando después de error 429")
+                return self.retry(exc=e, countdown=5)  # Esperar 5 segundos antes de reintentar
+            except self.MaxRetriesExceededError:
+                error_msg = "Demasiados intentos fallidos. Por favor, inténtalo de nuevo más tarde."
+        
         task_status[task_id] = {"status": "error", "message": error_msg}
         return {"status": "error", "message": error_msg}
 
