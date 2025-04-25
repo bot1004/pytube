@@ -1,6 +1,7 @@
 import os
 import uuid
 import logging
+import subprocess
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from celery import Celery
@@ -8,6 +9,7 @@ import yt_dlp
 import pytube
 import instaloader
 import time
+import ffmpeg
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +20,6 @@ app = Flask(__name__)
 CORS(app)
 
 # Configuración de Celery con variables de entorno para Render.com
-# Asegurarse de que la URL de Redis tenga el formato correcto
 redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
 
 # Asegurarse de que la URL comienza con 'redis://'
@@ -27,7 +28,7 @@ if not redis_url.startswith('redis://') and not redis_url.startswith('rediss://'
 
 logger.info(f"Usando Redis URL: {redis_url}")
 
-# Configuración de Celery (usando método recomendado para evitar warnings)
+# Configuración de Celery
 app.config['broker_url'] = redis_url
 app.config['result_backend'] = redis_url
 
@@ -48,6 +49,13 @@ celery.conf.update(app.config)
 # Almacenamiento temporal de estado de tareas
 task_status = {}
 
+def check_ffmpeg():
+    try:
+        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return False
+
 @celery.task(bind=True, max_retries=3)
 def download_task(self, url, media_type, quality=None):
     task_id = self.request.id
@@ -55,6 +63,10 @@ def download_task(self, url, media_type, quality=None):
     task_status[task_id] = {"status": "processing", "message": "Iniciando descarga..."}
     
     try:
+        # Verificar ffmpeg
+        if not check_ffmpeg():
+            raise Exception("ffmpeg no está instalado. Por favor, instálalo para continuar.")
+        
         filename = None
         download_path = None
         
@@ -65,82 +77,48 @@ def download_task(self, url, media_type, quality=None):
         if 'youtube.com' in url or 'youtu.be' in url:
             logger.info(f"Tarea {task_id}: Detectada URL de YouTube")
             
-            if media_type == 'audio':
-                logger.info(f"Tarea {task_id}: Configurando descarga de audio")
-                ydl_opts = {
-                    'format': 'bestaudio/best',
-                    'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
-                    'postprocessors': [{
-                        'key': 'FFmpegExtractAudio',
-                        'preferredcodec': 'mp3',
-                        'preferredquality': '192',
-                    }],
-                    'verbose': True,
-                    'no_warnings': False,
-                    'retries': 10,
-                    'fragment_retries': 10,
-                    'skip_download_archive': True,
-                    'extractor_retries': 3,
-                    'ignoreerrors': True,
-                    'no_check_certificate': True,
-                    'prefer_insecure': True,
-                    'geo_bypass': True,
-                    'geo_verification_proxy': None,
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'en-us,en;q=0.5',
-                        'Sec-Fetch-Mode': 'navigate',
-                        'DNT': '1',
-                        'Upgrade-Insecure-Requests': '1',
-                        'Cache-Control': 'max-age=0',
-                        'Connection': 'keep-alive',
-                    },
-                }
+            try:
+                # Usar pytube para YouTube
+                yt = pytube.YouTube(url)
                 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    logger.info(f"Tarea {task_id}: Ejecutando yt-dlp para audio")
-                    info_dict = ydl.extract_info(url, download=True)
-                    filename = ydl.prepare_filename(info_dict)
-                    base, _ = os.path.splitext(filename)
-                    filename = f"{base}.mp3"
-                    download_path = filename
-                    logger.info(f"Tarea {task_id}: Audio descargado en {download_path}")
+                if media_type == 'audio':
+                    logger.info(f"Tarea {task_id}: Configurando descarga de audio")
+                    stream = yt.streams.filter(only_audio=True).first()
+                    if not stream:
+                        raise Exception("No se encontró stream de audio")
+                        
+                    # Descargar el archivo
+                    download_path = stream.download(output_path=DOWNLOAD_FOLDER, filename=f"{unique_filename}.mp4")
                     
-            else:  # video
-                logger.info(f"Tarea {task_id}: Configurando descarga de video")
-                ydl_opts = {
-                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                    'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
-                    'verbose': True,
-                    'no_warnings': False,
-                    'retries': 10,
-                    'fragment_retries': 10,
-                    'skip_download_archive': True,
-                    'extractor_retries': 3,
-                    'ignoreerrors': True,
-                    'no_check_certificate': True,
-                    'prefer_insecure': True,
-                    'geo_bypass': True,
-                    'geo_verification_proxy': None,
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'en-us,en;q=0.5',
-                        'Sec-Fetch-Mode': 'navigate',
-                        'DNT': '1',
-                        'Upgrade-Insecure-Requests': '1',
-                        'Cache-Control': 'max-age=0',
-                        'Connection': 'keep-alive',
-                    },
-                }
+                    # Convertir a MP3 usando ffmpeg
+                    mp3_path = os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.mp3")
+                    try:
+                        stream = ffmpeg.input(download_path)
+                        stream = ffmpeg.output(stream, mp3_path, acodec='libmp3lame', q=2)
+                        ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
+                    except ffmpeg.Error as e:
+                        logger.error(f"Error en ffmpeg: {e.stderr.decode()}")
+                        raise Exception("Error al convertir el audio a MP3")
+                    
+                    # Eliminar el archivo original
+                    os.remove(download_path)
+                    download_path = mp3_path
+                    
+                else:  # video
+                    logger.info(f"Tarea {task_id}: Configurando descarga de video")
+                    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+                    if not stream:
+                        raise Exception("No se encontró stream de video")
+                        
+                    download_path = stream.download(output_path=DOWNLOAD_FOLDER, filename=f"{unique_filename}.mp4")
                 
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    logger.info(f"Tarea {task_id}: Ejecutando yt-dlp para video")
-                    info_dict = ydl.extract_info(url, download=True)
-                    filename = ydl.prepare_filename(info_dict)
-                    download_path = filename
-                    logger.info(f"Tarea {task_id}: Video descargado en {download_path}")
+                logger.info(f"Tarea {task_id}: Contenido descargado en {download_path}")
+                
+            except Exception as e:
+                error_msg = f"Error al descargar de YouTube: {str(e)}"
+                logger.error(f"Tarea {task_id}: {error_msg}")
+                task_status[task_id] = {"status": "error", "message": error_msg}
+                return {"status": "error", "message": error_msg}
         
         elif 'tiktok.com' in url:
             logger.info(f"Tarea {task_id}: Detectada URL de TikTok")
