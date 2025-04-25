@@ -51,8 +51,8 @@ task_status = {}
 @celery.task(bind=True)
 def download_task(self, url, media_type, quality=None):
     task_id = self.request.id
-    task_status[task_id] = {"status": "processing", "message": "Iniciando descarga..."}
     logger.info(f"Tarea {task_id}: Iniciando descarga de {url}")
+    task_status[task_id] = {"status": "processing", "message": "Iniciando descarga..."}
     
     try:
         filename = None
@@ -60,12 +60,13 @@ def download_task(self, url, media_type, quality=None):
         
         # Generar un nombre de archivo único
         unique_filename = f"{uuid.uuid4().hex}"
+        logger.info(f"Tarea {task_id}: Nombre de archivo único generado: {unique_filename}")
         
         if 'youtube.com' in url or 'youtu.be' in url:
             logger.info(f"Tarea {task_id}: Detectada URL de YouTube")
             
             if media_type == 'audio':
-                # Descargar solo audio usando yt-dlp
+                logger.info(f"Tarea {task_id}: Configurando descarga de audio")
                 ydl_opts = {
                     'format': 'bestaudio/best',
                     'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
@@ -74,64 +75,41 @@ def download_task(self, url, media_type, quality=None):
                         'preferredcodec': 'mp3',
                         'preferredquality': '192',
                     }],
+                    'verbose': True,
+                    'no_warnings': False,
                 }
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     logger.info(f"Tarea {task_id}: Ejecutando yt-dlp para audio")
                     info_dict = ydl.extract_info(url, download=True)
                     filename = ydl.prepare_filename(info_dict)
-                    # Cambiar la extensión a mp3 ya que el post-procesador lo convierte
                     base, _ = os.path.splitext(filename)
                     filename = f"{base}.mp3"
                     download_path = filename
                     logger.info(f"Tarea {task_id}: Audio descargado en {download_path}")
                     
             else:  # video
-                logger.info(f"Tarea {task_id}: Usando pytube para video")
-                # Usar pytube para videos
-                yt = pytube.YouTube(url)
+                logger.info(f"Tarea {task_id}: Configurando descarga de video")
+                ydl_opts = {
+                    'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                    'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
+                    'verbose': True,
+                    'no_warnings': False,
+                }
                 
-                if quality:
-                    stream = yt.streams.filter(res=quality).first()
-                    if not stream:
-                        stream = yt.streams.get_highest_resolution()
-                else:
-                    stream = yt.streams.get_highest_resolution()
-                
-                logger.info(f"Tarea {task_id}: Stream seleccionado: {stream}")
-                filename = f"{unique_filename}.mp4"
-                download_path = os.path.join(DOWNLOAD_FOLDER, filename)
-                stream.download(output_path=DOWNLOAD_FOLDER, filename=filename)
-                logger.info(f"Tarea {task_id}: Video descargado en {download_path}")
-                
-        elif 'instagram.com' in url:
-            logger.info(f"Tarea {task_id}: Detectada URL de Instagram")
-            L = instaloader.Instaloader(
-                dirname_pattern=DOWNLOAD_FOLDER,
-                filename_pattern=unique_filename
-            )
-            
-            if '/p/' in url:  # Es una publicación
-                shortcode = url.split('/p/')[1].split('/')[0]
-                post = instaloader.Post.from_shortcode(L.context, shortcode)
-                L.download_post(post, target=unique_filename)
-                
-                # Encuentra el archivo descargado
-                for file in os.listdir(DOWNLOAD_FOLDER):
-                    if file.startswith(unique_filename):
-                        if (media_type == 'video' and file.endswith('.mp4')) or \
-                           (media_type == 'image' and (file.endswith('.jpg') or file.endswith('.png'))):
-                            filename = file
-                            download_path = os.path.join(DOWNLOAD_FOLDER, filename)
-                            logger.info(f"Tarea {task_id}: Contenido de Instagram descargado en {download_path}")
-                            break
-            else:
-                raise Exception("Solo se permiten enlaces directos a publicaciones de Instagram")
-                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    logger.info(f"Tarea {task_id}: Ejecutando yt-dlp para video")
+                    info_dict = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(info_dict)
+                    download_path = filename
+                    logger.info(f"Tarea {task_id}: Video descargado en {download_path}")
+        
         elif 'tiktok.com' in url:
             logger.info(f"Tarea {task_id}: Detectada URL de TikTok")
             ydl_opts = {
                 'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
+                'verbose': True,
+                'no_warnings': False,
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -139,12 +117,13 @@ def download_task(self, url, media_type, quality=None):
                 filename = ydl.prepare_filename(info_dict)
                 download_path = filename
                 logger.info(f"Tarea {task_id}: Video de TikTok descargado en {download_path}")
-                
+        
         else:
-            # Para otras plataformas, usar yt-dlp genérico
             logger.info(f"Tarea {task_id}: Iniciando descarga genérica con yt-dlp")
             ydl_opts = {
                 'outtmpl': os.path.join(DOWNLOAD_FOLDER, f"{unique_filename}.%(ext)s"),
+                'verbose': True,
+                'no_warnings': False,
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -154,36 +133,34 @@ def download_task(self, url, media_type, quality=None):
                 logger.info(f"Tarea {task_id}: Contenido descargado en {download_path}")
         
         if not download_path or not os.path.exists(download_path):
-            logger.error(f"Tarea {task_id}: No se encontró el archivo descargado: {download_path}")
+            error_msg = f"No se encontró el archivo descargado: {download_path}"
+            logger.error(f"Tarea {task_id}: {error_msg}")
             task_status[task_id] = {
                 "status": "error", 
-                "message": f"Error: No se pudo descargar el archivo"
+                "message": error_msg
             }
-            return {"status": "error", "message": "No se pudo descargar el archivo"}
+            return {"status": "error", "message": error_msg}
             
         logger.info(f"Tarea {task_id}: Descarga completada exitosamente")
         
         # Construir la URL de descarga
         download_url = f"/api/file/{os.path.basename(download_path)}"
         
-        task_status[task_id] = {
+        result = {
             "status": "success",
             "message": "Descarga completada",
             "download_url": download_url,
             "filename": os.path.basename(download_path)
         }
         
-        return {
-            "status": "success",
-            "message": "Descarga completada",
-            "download_url": download_url,
-            "filename": os.path.basename(download_path)
-        }
+        task_status[task_id] = result
+        return result
         
     except Exception as e:
-        logger.error(f"Tarea {task_id}: Error al descargar: {str(e)}")
-        task_status[task_id] = {"status": "error", "message": f"Error: {str(e)}"}
-        return {"status": "error", "message": str(e)}
+        error_msg = f"Error al descargar: {str(e)}"
+        logger.error(f"Tarea {task_id}: {error_msg}")
+        task_status[task_id] = {"status": "error", "message": error_msg}
+        return {"status": "error", "message": error_msg}
 
 @app.route('/api/download', methods=['POST'])
 def download():
@@ -225,16 +202,18 @@ def task_status_route(task_id):
         
         # Primero verificar nuestro diccionario local
         if task_id in task_status:
-            logger.info(f"Estado de tarea {task_id} encontrado en caché local")
+            logger.info(f"Estado de tarea {task_id} encontrado en caché local: {task_status[task_id]}")
             return jsonify(task_status[task_id])
             
         # Si no está en el diccionario local, verificar en Celery
         task = download_task.AsyncResult(task_id)
+        logger.info(f"Estado de tarea {task_id} en Celery: {task.state}")
         
         if task.state == 'PENDING':
             response = {
                 "status": "processing",
-                "message": "La tarea está pendiente"
+                "message": "La tarea está pendiente",
+                "task_id": task_id
             }
         elif task.state == 'SUCCESS':
             if task.result.get('status') == 'error':
@@ -257,7 +236,8 @@ def task_status_route(task_id):
         else:
             response = {
                 "status": "processing",
-                "message": f"Estado de la tarea: {task.state}"
+                "message": f"Estado de la tarea: {task.state}",
+                "task_id": task_id
             }
         
         logger.info(f"Estado de tarea {task_id} desde Celery: {response['status']}")
@@ -266,10 +246,11 @@ def task_status_route(task_id):
         return jsonify(response)
         
     except Exception as e:
-        logger.error(f"Error al verificar estado: {str(e)}")
+        error_msg = f"Error al verificar estado: {str(e)}"
+        logger.error(error_msg)
         return jsonify({
             "status": "error",
-            "message": f"Error al verificar estado: {str(e)}"
+            "message": error_msg
         }), 500
 
 @app.route('/api/file/<filename>', methods=['GET'])
