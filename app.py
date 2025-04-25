@@ -10,6 +10,7 @@ import pytube
 import instaloader
 import time
 import ffmpeg
+import random
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +57,16 @@ def check_ffmpeg():
     except (subprocess.SubprocessError, FileNotFoundError):
         return False
 
+def get_random_user_agent():
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15'
+    ]
+    return random.choice(user_agents)
+
 @celery.task(bind=True, max_retries=3)
 def download_task(self, url, media_type, quality=None):
     task_id = self.request.id
@@ -78,8 +89,23 @@ def download_task(self, url, media_type, quality=None):
             logger.info(f"Tarea {task_id}: Detectada URL de YouTube")
             
             try:
-                # Usar pytube para YouTube
-                yt = pytube.YouTube(url)
+                # Configurar pytube con headers personalizados
+                yt = pytube.YouTube(
+                    url,
+                    use_oauth=False,
+                    allow_oauth_cache=False,
+                    http_client=None,
+                    http_headers={
+                        'User-Agent': get_random_user_agent(),
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-us,en;q=0.5',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'DNT': '1',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Cache-Control': 'max-age=0',
+                        'Connection': 'keep-alive',
+                    }
+                )
                 
                 if media_type == 'audio':
                     logger.info(f"Tarea {task_id}: Configurando descarga de audio")
@@ -117,6 +143,14 @@ def download_task(self, url, media_type, quality=None):
             except Exception as e:
                 error_msg = f"Error al descargar de YouTube: {str(e)}"
                 logger.error(f"Tarea {task_id}: {error_msg}")
+                
+                # Si es un error 429, esperar y reintentar
+                if "HTTP Error 429" in str(e):
+                    wait_time = random.randint(5, 15)  # Esperar entre 5 y 15 segundos
+                    logger.info(f"Tarea {task_id}: Esperando {wait_time} segundos antes de reintentar")
+                    time.sleep(wait_time)
+                    return self.retry(exc=e, countdown=wait_time)
+                
                 task_status[task_id] = {"status": "error", "message": error_msg}
                 return {"status": "error", "message": error_msg}
         
@@ -136,7 +170,7 @@ def download_task(self, url, media_type, quality=None):
                 'geo_bypass': True,
                 'geo_verification_proxy': None,
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'User-Agent': get_random_user_agent(),
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-us,en;q=0.5',
                     'Sec-Fetch-Mode': 'navigate',
@@ -169,7 +203,7 @@ def download_task(self, url, media_type, quality=None):
                 'geo_bypass': True,
                 'geo_verification_proxy': None,
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'User-Agent': get_random_user_agent(),
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-us,en;q=0.5',
                     'Sec-Fetch-Mode': 'navigate',
@@ -217,8 +251,10 @@ def download_task(self, url, media_type, quality=None):
         # Si es un error 429, reintentar
         if "HTTP Error 429" in str(e):
             try:
-                logger.info(f"Tarea {task_id}: Reintentando después de error 429")
-                return self.retry(exc=e, countdown=5)  # Esperar 5 segundos antes de reintentar
+                wait_time = random.randint(5, 15)  # Esperar entre 5 y 15 segundos
+                logger.info(f"Tarea {task_id}: Esperando {wait_time} segundos antes de reintentar")
+                time.sleep(wait_time)
+                return self.retry(exc=e, countdown=wait_time)
             except self.MaxRetriesExceededError:
                 error_msg = "Demasiados intentos fallidos. Por favor, inténtalo de nuevo más tarde."
         
